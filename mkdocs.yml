@@ -1,0 +1,15 @@
+site_name: Developer Inspiration Assistant
+site_description: AI assistant that finds award-winning ReadyTensor projects
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: amber
+  features:
+    - navigation.tabs
+    - search
+nav:
+  - Home: index.md
+  - About: about.md
+  - Usage: usage.md

@@ -1,0 +1,10 @@
+# Code formatting and linting
+black==23.9.1
+isort==6.0.0
+mypy==1.5.1
+
+# Testing
+pytest==7.4.0
+
+# Development environment helpers
+ipython==8.15.0

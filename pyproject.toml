@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "developer-inspiration-assistant"
+version = "0.1.0"
+description = "AI assistant for developer inspiration using LangChain, HuggingFace, and Groq."
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.12"
+langchain = "0.3.27"
+langchain-core = "0.3.79"
+langchain-chroma = "0.2.6"
+langchain-huggingface = "0.3.1"
+langchain-groq = "0.3.8"
+chromadb = "1.0.20"
+sentence-transformers = "2.7.0"
+python-dotenv = "^1.0.1"
+pandas = "^2.2.2"
+streamlit = "^1.39.0"
+transformers = "4.45.2"
+tokenizers = "0.20.0"
+torch = "2.3.0"
+numpy = "<2"
+fuzzywuzzy = "^0.18.0"
+python-Levenshtein = "^0.25.0"
+playwright = "^1.47.0"  # Latest version as of October 2025
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
