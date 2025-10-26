@@ -39,3 +39,6 @@ echo GROQ_API_KEY=your_key_here > .env
 
 # • CLI
 "C:\Program Files\Python310\python.exe" assistant.py
+## License
+
+This project is licensed under the **MIT License** – see the [LICENSE](LICENSE) file for details.
