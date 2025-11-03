@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 1. Upgrade pip (quietly)
+echo "Upgrading pip..."
 python -m pip install --upgrade pip --quiet
 
-# 2. Install Poetry itself (if not already present)
+echo "Installing Poetry..."
 python -m pip install poetry --quiet
 
-# 3. Run Poetry install – only the main group, completely silent
-poetry install --only main \
+echo "Installing dependencies (no-root)..."
+poetry install --no-root \
+    --only main \
     --quiet \
     --no-interaction \
     --no-ansi \
-    --no-cache \
     --sync
 
-# 4. (optional) make sure the virtual-env bin is on PATH for Streamlit
-export PATH="$(poetry env info --path)/bin:$PATH"
+# Activate venv so streamlit is on PATH
+source "$(poetry env info --path)/bin/activate"
+
+echo "Setup complete! streamlit path: $(which streamlit)"

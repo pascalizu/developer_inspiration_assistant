@@ -25,18 +25,15 @@ fuzzywuzzy = "^0.18.0"
 python-Levenshtein = "^0.25.0"
 playwright = "^1.47.0"
 
-# -----  NEW: pin the packages that printed warnings  -----
+# ---- NEW: pin the packages that caused warnings ----
 markdown-it-py = "4.0.0"
 mdurl = "0.1.2"
 pygments = "2.19.2"
 rich = "14.2.0"
 
+[tool.poetry.group.dev.dependencies]
+# (add dev tools here if you have any)
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
-# -----------------------------------------------------------------
-# OPTIONAL – expose the markdown-it CLI in a location that is always on PATH
-# -----------------------------------------------------------------
-[project.scripts]
-markdown-it = "markdown_it.cli:cli"
