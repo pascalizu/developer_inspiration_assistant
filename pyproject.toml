@@ -23,8 +23,20 @@ torch = "2.3.0"
 numpy = "<2"
 fuzzywuzzy = "^0.18.0"
 python-Levenshtein = "^0.25.0"
-playwright = "^1.47.0"  # Latest version as of October 2025
+playwright = "^1.47.0"
+
+# -----  NEW: pin the packages that printed warnings  -----
+markdown-it-py = "4.0.0"
+mdurl = "0.1.2"
+pygments = "2.19.2"
+rich = "14.2.0"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+# -----------------------------------------------------------------
+# OPTIONAL – expose the markdown-it CLI in a location that is always on PATH
+# -----------------------------------------------------------------
+[project.scripts]
+markdown-it = "markdown_it.cli:cli"
