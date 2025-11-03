@@ -1,24 +1,10 @@
 import os
 import re
 import difflib
-try:
-    from fuzzywuzzy import fuzz
-    FUZZY_AVAILABLE = True
-except ImportError:
-    FUZZY_AVAILABLE = False
+import sys
 from dotenv import load_dotenv, find_dotenv
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_groq import ChatGroq
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
 
-# --- Config ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
-
-# Load .env
+# --- Early ENV Load ---
 dotenv_path = find_dotenv()
 if dotenv_path:
     load_dotenv(dotenv_path, override=True)
@@ -29,23 +15,55 @@ else:
 # Load Groq API key
 api_key = os.getenv("GROQ_API_KEY")
 if not api_key:
-    raise ValueError("❌ GROQ_API_KEY not found in environment!")
-else:
-    print(f"✅ GROQ_API_KEY loaded, starts with: {api_key[:7]}...")
+    raise ValueError("❌ GROQ_API_KEY not found in environment! Add to .env or system vars.")
+print(f"✅ GROQ_API_KEY loaded, starts with: {api_key[:7]}... ({len(api_key)} chars)")
 
-# Embeddings (must match ingestion)
+# --- Test Key Immediately (Before Heavy Imports) ---
+print("🧪 Testing Groq API key...")
+try:
+    from langchain_groq import ChatGroq
+    # FIXED: Use recommended model (deprecation replacement)
+    test_llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=api_key)
+    test_response = test_llm.invoke("Say 'Hello' in 1 word.")
+    print(f"✅ API key valid! Model says: {test_response.content}")
+except Exception as e:
+    print(f"❌ API/Model error: {e}")
+    print("💡 Fix: Check https://console.groq.com/docs/deprecations for model updates")
+    sys.exit(1)  # Stop early
+
+# --- Now Load Heavy Libs ---
+try:
+    from fuzzywuzzy import fuzz
+    FUZZY_AVAILABLE = True
+    print("✅ Fuzzywuzzy available")
+except ImportError:
+    FUZZY_AVAILABLE = False
+    print("⚠️ Fuzzywuzzy not available – using difflib fallback")
+
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain.prompts import ChatPromptTemplate
+from langchain.schema.runnable import RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+
+# --- Config ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
+
+if not os.path.exists(CHROMA_DIR):
+    raise ValueError(f"❌ Chroma DB not found at {CHROMA_DIR}! Run ingestion first.")
+
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
 
-# Reconnect to persistent DB
-vectorstore = Chroma(
-    persist_directory=CHROMA_DIR,
-    embedding_function=embeddings,
-)
+# --- LLM (FIXED: Use recommended model + fallback) ---
+MODEL_NAME = "llama-3.3-70b-versatile"  # Recommended replacement
+FALLBACK_MODEL = "mixtral-8x7b-32768"   # Stable alternative if needed
 
-# --- LLM ---
-llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=api_key)
+llm = ChatGroq(model=MODEL_NAME, api_key=api_key)
+print(f"✅ LLM initialized with model: {MODEL_NAME}")
 
-# System prompt
+# System prompt (unchanged)
 template = """
 You are the Developer Inspiration Assistant. 
 Use ONLY the following context from ReadyTensor publications to answer the user’s question.
@@ -63,7 +81,7 @@ Answer as clearly and helpfully as possible, citing the source publication (titl
 """
 prompt = ChatPromptTemplate.from_template(template)
 
-# --- Ask Function ---
+# --- Ask Function (unchanged core logic) ---
 def ask_assistant(query: str, award: str = None, top_k: int = 500):
     """Query the vectorstore with optional award filter."""
     try:
@@ -140,8 +158,9 @@ def ask_assistant(query: str, award: str = None, top_k: int = 500):
 
 # --- CLI Testing ---
 if __name__ == "__main__":
+    print("💡 Developer Inspiration Assistant CLI – Type 'quit' to exit.")
     while True:
-        query = input("Ask a question (or 'quit'): ")
+        query = input("\nAsk a question: ")
         if query.lower() == "quit":
             break
 
@@ -158,4 +177,6 @@ if __name__ == "__main__":
             award = "best overall project"
 
         print(f"Parsed query: {query}, Award: {award}")
-        print("\nAssistant:", ask_assistant(query, award=award))
+        print("🤔 Thinking...")
+        response = ask_assistant(query, award=award)
+        print(f"\nAssistant: {response}")
