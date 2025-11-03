@@ -1,13 +1,36 @@
-import streamlit as st
+# app.py
 import os
 import re
 import difflib
+import streamlit as st
+from dotenv import load_dotenv, find_dotenv
+
+# ----------------------------------------------------------------------
+# 1. ENV / API KEY
+# ----------------------------------------------------------------------
+load_dotenv()  # local .env (ignored in git)
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+if not GROQ_API_KEY:
+    st.error(
+        "GROQ_API_KEY not found!  \n"
+        "Add it to **Streamlit → Settings → Secrets** (cloud)  \n"
+        "or create a `.env` file locally."
+    )
+    st.stop()
+else:
+    st.success(f"GROQ_API_KEY loaded ({GROQ_API_KEY[:7]}…)")
+
+# ----------------------------------------------------------------------
+# 2. IMPORTS (after key check – avoids loading heavy libs if we stop)
+# ----------------------------------------------------------------------
 try:
     from fuzzywuzzy import fuzz
     FUZZY_AVAILABLE = True
-except ImportError:
+except ImportError:                     # type: ignore
     FUZZY_AVAILABLE = False
-from dotenv import load_dotenv, find_dotenv
+
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
@@ -15,176 +38,195 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
 
-# --- Config ---
+# ----------------------------------------------------------------------
+# 3. CONFIG
+# ----------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
 
-# Load .env
-dotenv_path = find_dotenv()
-if dotenv_path:
-    load_dotenv(dotenv_path, override=True)
-    st.write(f"🔑 Loaded .env from {dotenv_path}")
-else:
-    st.write("⚠️ No .env file found. Falling back to system environment variables.")
-
-# Load Groq API key
-api_key = os.getenv("GROQ_API_KEY")
-if not api_key:
-    st.error("❌ GROQ_API_KEY not found in environment!")
-    st.stop()
-else:
-    st.write(f"✅ GROQ_API_KEY loaded, starts with: {api_key[:7]}...")
-
-# Embeddings (must match ingestion)
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Reconnect to persistent DB
 vectorstore = Chroma(
     persist_directory=CHROMA_DIR,
     embedding_function=embeddings,
 )
 
-# --- LLM ---
-llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=api_key)
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    api_key=GROQ_API_KEY,
+)
 
-# System prompt
+# ----------------------------------------------------------------------
+# 4. PROMPT TEMPLATE
+# ----------------------------------------------------------------------
 template = """
-You are the Developer Inspiration Assistant. 
-Use ONLY the following context from ReadyTensor publications to answer the user’s question.
-List up to 5 projects that match the requested award, including their titles, IDs, and awards from metadata.
-A project matches if the award appears in the metadata awards or the chunk content (case-insensitive, allowing minor variations).
-If fewer than 5 projects match, list all available matches.
-If no projects match or the context is irrelevant, say "I don’t have enough information from ReadyTensor publications to list projects for this award."
+You are the **Developer Inspiration Assistant**.  
+Use **only** the context below (ReadyTensor publications) to answer the question.
+
+- List **up to 5** projects that match the requested award.  
+- Include **title**, **ID**, and **awards** from metadata.  
+- A project matches if the award appears in the metadata *awards* field **or** in the chunk text (case-insensitive, minor spelling variations allowed).  
+- If fewer than 5 matches exist, list all.  
+- If **no** matches or the context is irrelevant, reply:  
+  `"I don’t have enough information from ReadyTensor publications to list projects for this award."`
 
 Context:
 {context}
 
 Question: {question}
 
-Answer as clearly and helpfully as possible, citing the source publication (title and ID).
+Answer clearly, citing the source (title + ID).
 """
 prompt = ChatPromptTemplate.from_template(template)
 
-# --- Ask Function ---
-def ask_assistant(query: str, award: str = None, top_k: int = 500):
-    """Query the vectorstore with optional award filter."""
+# ----------------------------------------------------------------------
+# 5. CORE ASK FUNCTION (unchanged logic, just wrapped in spinner later)
+# ----------------------------------------------------------------------
+def ask_assistant(query: str, award: str | None = None, top_k: int = 500):
     try:
-        # Normalize award for filtering
-        award_normalized = award.strip().lower() if award else None
+        # ------------------------------------------------------------------
+        # 5.1 Retrieval + optional award filter
+        # ------------------------------------------------------------------
+        award_norm = award.strip().lower() if award else None
 
-        # Build search parameters
-        docs = []
-        if award_normalized:
-            # Use text search focused on award
-            text_query = award_normalized
+        if award_norm:
+            # Text-search first, then fuzzy-filter
             retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
-            docs = retriever.invoke(text_query)
+            docs = retriever.invoke(award_norm)
 
-            # Post-filter with fuzzy matching
-            filtered_docs = []
+            filtered = []
             for doc in docs:
                 awards_str = doc.metadata.get("awards", "none").lower()
                 content = doc.page_content.lower()
-                matches = False
-                if award_normalized in awards_str or award_normalized in content:
-                    matches = True
-                elif FUZZY_AVAILABLE:
-                    if any(fuzz.ratio(award_normalized, a.lower()) > 70 for a in awards_str.split(" | ")):
-                        matches = True
-                else:
-                    if any(difflib.SequenceMatcher(None, award_normalized, a.lower()).ratio() > 0.7 for a in awards_str.split(" | ")):
-                        matches = True
-                if matches:
-                    filtered_docs.append(doc)
 
-            # Deduplicate by ID
-            seen_ids = set()
-            unique_docs = []
-            for doc in filtered_docs:
-                if doc.metadata["id"] not in seen_ids:
-                    unique_docs.append(doc)
-                    seen_ids.add(doc.metadata["id"])
-            docs = unique_docs[:5]  # Limit to 5 projects
+                # exact match
+                if award_norm in awards_str or award_norm in content:
+                    filtered.append(doc)
+                    continue
+
+                # fuzzy match
+                if FUZZY_AVAILABLE:
+                    if any(fuzz.ratio(award_norm, a.lower()) > 70 for a in awards_str.split(" | ")):
+                        filtered.append(doc)
+                        continue
+                else:
+                    if any(difflib.SequenceMatcher(None, award_norm, a.lower()).ratio() > 0.7
+                           for a in awards_str.split(" | ")):
+                        filtered.append(doc)
+                        continue
+
+            # Deduplicate by ID & keep ≤5
+            seen = set()
+            unique = []
+            for d in filtered:
+                pid = d.metadata["id"]
+                if pid not in seen:
+                    unique.append(d)
+                    seen.add(pid)
+            docs = unique[:5]
         else:
             retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
             docs = retriever.invoke(query)
-            # Deduplicate by ID
-            seen_ids = set()
-            unique_docs = []
-            for doc in docs:
-                if doc.metadata["id"] not in seen_ids:
-                    unique_docs.append(doc)
-                    seen_ids.add(doc.metadata["id"])
-            docs = unique_docs[:5]
 
-        # Format context
-        context = "\n".join([f"Title: {doc.metadata['title']}\nID: {doc.metadata['id']}\nAwards: {doc.metadata['awards']}\nContent: {doc.page_content}" for doc in docs])
+            seen = set()
+            unique = []
+            for d in docs:
+                pid = d.metadata["id"]
+                if pid not in seen:
+                    unique.append(d)
+                    seen.add(pid)
+            docs = unique[:5]
 
-        # Build RAG chain
+        # ------------------------------------------------------------------
+        # 5.2 Build context string
+        # ------------------------------------------------------------------
+        context_lines = [
+            f"Title: {d.metadata['title']}\n"
+            f"ID: {d.metadata['id']}\n"
+            f"Awards: {d.metadata['awards']}\n"
+            f"Content: {d.page_content}"
+            for d in docs
+        ]
+        context = "\n\n".join(context_lines)
+
+        # ------------------------------------------------------------------
+        # 5.3 RAG chain
+        # ------------------------------------------------------------------
         rag_chain = (
-            {"context": lambda x: context, "question": RunnablePassthrough()}
+            {"context": lambda _: context, "question": RunnablePassthrough()}
             | prompt
             | llm
             | StrOutputParser()
         )
 
-        # Log for debugging
-        st.write("Retrieved document IDs:", [doc.metadata["id"] for doc in docs])
-        st.write(f"Filtered to {len(docs)} unique projects with award '{award_normalized}'")
-        st.write("Sample retrieved content (first 3):")
-        for i, doc in enumerate(docs[:3]):
-            st.write(f"Doc {i+1}: ID={doc.metadata['id']}, Awards={doc.metadata['awards']}, Content={doc.page_content[:100]}...")
+        # ------------------------------------------------------------------
+        # 5.4 Debug output (optional – hide in prod if you want)
+        # ------------------------------------------------------------------
+        st.write("**Debug – retrieved IDs:**", [d.metadata["id"] for d in docs])
+        st.write(f"**Filtered to {len(docs)}** unique projects (award: `{award_norm or 'none'}`)")
 
         return rag_chain.invoke(query)
 
     except Exception as e:
-        return f"⚠️ Error while generating response: {e}"
+        return f"Error while generating response: {e}"
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="Developer Inspiration Assistant", page_icon="💡", layout="wide")
-st.title("💡 Developer Inspiration Assistant")
-st.markdown("Ask about ReadyTensor publications or projects with specific awards.")
+# ----------------------------------------------------------------------
+# 6. UI
+# ----------------------------------------------------------------------
+st.set_page_config(page_title="Developer Inspiration Assistant", page_icon="Light Bulb", layout="wide")
+st.title("Light Bulb Developer Inspiration Assistant")
+st.markdown("Ask about ReadyTensor publications or list projects with a specific **award** (e.g. *tag \"Best Overall Project\"*).")
 
-# --- Session state for chat memory ---
+# Chat history
 if "messages" not in st.session_state:
-    st.session_state["messages"] = []
+    st.session_state.messages = []
 
-# --- Display the chat log ---
-st.markdown("### Chat")
-for role, text in st.session_state["messages"]:
+for role, txt in st.session_state.messages:
     if role == "user":
-        st.markdown(f"**You:** {text}")
+        st.markdown(f"**You:** {txt}")
     else:
-        st.markdown(f"**Assistant:** {text}")
+        st.markdown(f"**Assistant:** {txt}")
 
-# --- Input form at bottom ---
+# ----------------------------------------------------------------------
+# 7. INPUT FORM
+# ----------------------------------------------------------------------
 st.markdown("---")
 with st.form("chat_form", clear_on_submit=True):
-    user_input = st.text_input("Type your message:", placeholder="e.g., 'tag \"Best Overall Project\" List 5 projects from this category'")
+    user_input = st.text_input(
+        "Your question / command:",
+        placeholder='e.g. tag "Best Overall Project" List 5 projects from this category'
+    )
     submitted = st.form_submit_button("Send")
 
 if submitted and user_input:
-    # Extract award from query
+    # ------------------------------------------------------------------
+    # 7.1 Extract award (your original regex + a few shortcuts)
+    # ------------------------------------------------------------------
     award = None
-    query_lower = user_input.lower()
-    if "tag" in query_lower:
-        match = re.search(r"tag\s+'([^']+)'", user_input, re.IGNORECASE)
-        if match:
-            award = match.group(1).lower()
-    elif "most innovative project" in query_lower or "most innovative projects" in query_lower:
+    lower = user_input.lower()
+
+    # regex: tag 'something'
+    m = re.search(r"tag\s*['\"]([^'\"]+)['\"]", user_input, re.IGNORECASE)
+    if m:
+        award = m.group(1)
+
+    # shortcuts
+    elif "most innovative" in lower:
         award = "most innovative project"
-    elif "best overall project" in query_lower or "best overall projects" in query_lower:
+    elif "best overall" in lower:
         award = "best overall project"
 
-    st.write(f"Parsed query: {user_input}, Award: {award}")
+    st.caption(f"**Parsed award:** `{award or 'none'}`")
 
-    # Call the assistant
-    with st.spinner("Fetching response..."):
+    # ------------------------------------------------------------------
+    # 7.2 CALL ASSISTANT – WITH NICE SPINNER
+    # ------------------------------------------------------------------
+    with st.spinner("**Generating inspiration…** Light Bulb"):
         response = ask_assistant(user_input, award=award)
 
-        # Save both user + assistant messages in session state
-        st.session_state["messages"].append(("user", user_input))
-        st.session_state["messages"].append(("assistant", response))
-
-    # Force refresh so chat updates immediately
+    # ------------------------------------------------------------------
+    # 7.3 Store & refresh
+    # ------------------------------------------------------------------
+    st.session_state.messages.append(("user", user_input))
+    st.session_state.messages.append(("assistant", response))
     st.rerun()
