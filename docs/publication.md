@@ -1,7 +1,7 @@
 # Developer Inspiration Assistant: RAG-Powered Discovery of Award-Winning AI Projects
 
-![Hero Image: RAG Pipeline for Project Inspiration](assets/hero-rag-pipeline.png)  
-*High-level overview: Query → Retrieve ReadyTensor Projects → Generate Inspired Recommendations with Code Snippets.*
+### Hero Image (top of page)
+![Hero Image](assets/hero-rag-pipeline.png)
 
 ## Abstract
 
