@@ -51,3 +51,12 @@ ReadyTensor publications are scraped into JSON (`data/readytensor_publications.j
 # From ingest.py
 splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
 chunks = splitter.split_text(full_text)
+
+### 4.2 Embedding Model
+The system uses the lightweight **sentence-transformers/all-MiniLM-L6-v2** model (384-dimensional vectors). This model strikes an excellent balance between speed, memory usage, and semantic quality, making it ideal for local indexing of hundreds of publications.
+
+### 4.3 Vector Store
+**ChromaDB** is employed as the persistent vector store (`chroma_db/` directory). All telemetry is disabled for privacy:
+
+```python
+client_settings=chromadb.Settings(anonymized_telemetry=False)
