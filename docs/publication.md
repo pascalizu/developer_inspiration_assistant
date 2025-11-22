@@ -1,8 +1,6 @@
 # Developer Inspiration Assistant: RAG-Powered Discovery of Award-Winning AI Projects
 
-### Hero Image (top of page)
-![Hero Image](assets/hero-rag-pipeline.png)
-
+![Hero Image - Developer Inspiration Assistant](https://raw.githubusercontent.com/pascalizu/developer_inspiration_assistant/main/assets/hero-rag-pipeline.png)
 ## Abstract
 
 The **Developer Inspiration Assistant** is an open-source AI tool that leverages **Retrieval-Augmented Generation (RAG)** to help developers discover and draw inspiration from award-winning projects on ReadyTensor. By indexing 187+ publications with `all-MiniLM-L6-v2` embeddings and using `Llama-3.3-70B (Groq)` for generation, it supports natural queries like `tag "Best Overall Project"` and returns up to 5 matching projects with full context (title, ID, awards, snippets).  
@@ -34,7 +32,7 @@ Unlike general tools, this is **ReadyTensor-specific**, with fuzzy award matchin
 
 ## 3. System Architecture
 
-![Architecture Diagram](assets/architecture-diagram.png)  
+![RAG Pipeline Architecture Diagram](https://raw.githubusercontent.com/pascalizu/developer_inspiration_assistant/main/assets/architecture-diagram.png)  
 *Components: Ingestion (JSON → Chunks) → Embeddings (MiniLM-L6-v2) → ChromaDB → Hybrid Retrieval (MMR + Award Filter) → Groq LLM → Inspired Output.*
 
 The system follows a **three-stage pipeline**:
@@ -85,7 +83,7 @@ Strict prompt with temperature = 0.0:
     If no strong matches, reply: "I don’t have enough information about that award yet."
 
 ### Pipeline Overview
-![RAG Pipeline Overview](assets/architecture-diagram.png)
+![RAG Pipeline Architecture Diagram](https://raw.githubusercontent.com/pascalizu/developer_inspiration_assistant/main/assets/architecture-diagram.png)
 ---
 
 ## 5. Evaluation
@@ -94,7 +92,7 @@ Strict prompt with temperature = 0.0:
 187 ReadyTensor publications + 20 test queries (15 award-specific, 5 open-ended).
 
 ### 5.2 Results (RAGAS)
-![Chunk Size vs Recall](assets/chunk-size-recall.png)
+![Chunk Size vs Recall](https://raw.githubusercontent.com/pascalizu/developer_inspiration_assistant/main/assets/chunk-size-recall.png)
 
 | Method                     | Recall@5 | Precision@5 | Faithfulness |
 |----------------------------|----------|-------------|--------------|
