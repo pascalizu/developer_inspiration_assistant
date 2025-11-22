@@ -51,13 +51,8 @@ ReadyTensor publications are scraped into JSON (`data/readytensor_publications.j
 # From ingest.py
 splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
 chunks = splitter.split_text(full_text)
+```
 
-Here is the **perfectly formatted, 100% valid Markdown** from **4.2 onwards** that you can copy-paste without any issues.  
-I tested it in GitHub and ReadyTensor — it renders perfectly (headings, code blocks, table, mermaid diagram, images, etc.).
-
-Just open `docs/publication.md` → scroll to where **4.1 ends** → delete everything below it → paste **this entire block** exactly as-is:
-
-```markdown
 ### 4.2 Embedding Model
 The lightweight **sentence-transformers/all-MiniLM-L6-v2** (384 dimensions) is used. It provides excellent semantic quality while being fast enough to run on any laptop.
 
