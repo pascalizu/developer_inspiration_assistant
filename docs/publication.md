@@ -85,16 +85,7 @@ Strict prompt with temperature = 0.0:
     If no strong matches, reply: "I don’t have enough information about that award yet."
 
 ### Pipeline Overview
-```mermaid
-flowchart LR
-    A[scraper.py] --> B[data/readytensor_publications.json]
-    B --> C[ingest.py]
-    C --> D[chroma_db/]
-    D --> E[Hybrid Retrieval\n(MMR + Award Filter)]
-    E --> F[Groq Llama-3.3-70B]
-    F --> G[Streamlit / CLI Answer]
-```
-
+![RAG Pipeline Overview](assets/architecture-diagram.png)
 ---
 
 ## 5. Evaluation
