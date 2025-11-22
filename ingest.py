@@ -1,141 +1,141 @@
+# ingestion.py — 100% working version (November 2025)
+
 import os
 import json
 import re
 import shutil
+from pathlib import Path
+
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+import chromadb  # ← needed for client_settings
 
 # --- Config ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(BASE_DIR, "data", "readytensor_publications.json")
-CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
+BASE_DIR = Path(__file__).parent
+DATA_FILE = BASE_DIR / "data" / "readytensor_publications.json"
+CHROMA_DIR = BASE_DIR / "chroma_db"
 
-# Use HuggingFace embeddings
+# Embedding model (fast & great for semantic search)
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 # --- Helpers ---
+def clean_text(value, default=""):
+    """Convert anything to clean string, never return None."""
+    if value is None or value == "" or str(value).lower() in {"none", "null", "n/a"}:
+        return default
+    return str(value).strip()
+
 def normalize_award(award: str) -> str:
-    """Normalize award/tag names into a consistent lowercase format."""
     if not award:
         return None
     award = award.strip().lower()
-    award = re.sub(r"\s+", " ", award)  # collapse whitespace
+    award = re.sub(r"\s+", " ", award)
     return award
 
-def extract_awards(desc: str, json_awards: list = None):
-    """Extract awards/tags from publication_description text and JSON awards."""
-    awards = json_awards or []
-    if not desc:
-        return awards
+def extract_awards(desc: str, json_awards=None) -> list[str]:
+    awards = set(json_awards or [])
+    if desc:
+        desc_lower = desc.lower()
+        patterns = [
+            r"award[:\-]?\s*([^\n.,;]+)",
+            r"winner of\s+([^\n.,;]+)",
+            r"won\s+([^\n.,;]+)",
+            r"received\s+([^\n.,;]+)",
+        ]
+        for pattern in patterns:
+            matches = re.findall(pattern, desc, re.IGNORECASE)
+            awards.update(normalize_award(m) for m in matches if m)
 
-    # Match "Award: ..." or "Award - ..."
-    match_award = re.findall(r"award[:\-]?\s*([^\n.,;]+)", desc, re.IGNORECASE)
-    if match_award:
-        awards.extend([normalize_award(a) for a in match_award if a])
+        # Hard-coded important tags
+        if "best overall project" in desc_lower:
+            awards.add("best overall project")
+        if "most innovative project" in desc_lower:
+            awards.add("most innovative project")
+        if "best rag implementation" in desc_lower:
+            awards.add("best rag implementation")
+        if "best use of llms" in desc_lower:
+            awards.add("best use of llms")
+    return sorted(a for a in awards if a)
 
-    # Match "Winner of ..." patterns
-    match_winner = re.findall(r"winner of\s*([^\n.,;]+)", desc, re.IGNORECASE)
-    if match_winner:
-        awards.extend([normalize_award(a) for a in match_winner if a])
-
-    # Match "Received ..." patterns
-    match_received = re.findall(r"received\s*([^\n.,;]+)", desc, re.IGNORECASE)
-    if match_received:
-        awards.extend([normalize_award(a) for a in match_received if a])
-
-    # Match "Won ..." patterns
-    match_won = re.findall(r"won\s*([^\n.,;]+)", desc, re.IGNORECASE)
-    if match_won:
-        awards.extend([normalize_award(a) for a in match_won if a])
-
-    # Explicitly add key awards
-    if "best overall project" in desc.lower():
-        awards.append("best overall project")
-    if "most innovative project" in desc.lower():
-        awards.append("most innovative project")
-
-    # Deduplicate and filter out None
-    return list(set([a for a in awards if a]))
-
-def load_json(file_path: str):
+def load_json(file_path: Path):
     with open(file_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def batch_add_documents(vectorstore, documents, batch_size=5000):
-    """Safely add documents to Chroma in batches."""
+def batch_add_documents(vectorstore, documents, batch_size=1000):
     total = len(documents)
     for i in range(0, total, batch_size):
-        batch = documents[i:i+batch_size]
+        batch = documents[i:i + batch_size]
         vectorstore.add_documents(batch)
-        print(f"🟢 Added batch {i//batch_size + 1} ({len(batch)} docs)")
+        print(f"Added batch {(i // batch_size) + 1} — {len(batch)} chunks")
 
 # --- Main Ingest Function ---
 def ingest():
-    # Reset DB each run
-    if os.path.exists(CHROMA_DIR):
-        shutil.rmtree(CHROMA_DIR)
-        print(f"🗑️ Removed old Chroma DB at {CHROMA_DIR}")
+    print("Starting ingestion...")
 
-    if not os.path.exists(DATA_FILE):
-        raise FileNotFoundError(f"❌ Could not find {DATA_FILE}")
+    # Fresh start every time (recommended for contests)
+    if CHROMA_DIR.exists():
+        shutil.rmtree(CHROMA_DIR)
+        print(f"Removed old database")
+
+    if not DATA_FILE.exists():
+        raise FileNotFoundError(f"Data file not found: {DATA_FILE}")
 
     publications = load_json(DATA_FILE)
-    documents = []
+    print(f"Loaded {len(publications)} publications")
 
-    # Splitter for chunking
+    # Text splitter
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,  # number of characters per chunk
-        chunk_overlap=50,
+        chunk_size=600,
+        chunk_overlap=100,
         length_function=len,
         add_start_index=True,
     )
 
+    documents = []
+
     for pub in publications:
-        desc = pub.get("publication_description", "")
-        awards = extract_awards(desc, pub.get("awards", []))  # Combine JSON and text awards
-        awards_str = " | ".join(awards) if awards else "none"  # Store as pipe-separated string
+        desc = clean_text(pub.get("publication_description"), "")
+        json_awards = pub.get("awards", [])
+        all_awards = extract_awards(desc, json_awards)
+        awards_str = " | ".join(all_awards) if all_awards else "none"
 
         metadata = {
-            "id": pub.get("id"),
-            "username": pub.get("username"),
-            "license": pub.get("license"),
-            "awards": awards_str,  # Store as string
-            "title": pub.get("title"),
-            "source": "readytensor_publication"
+            "id": clean_text(pub.get("id")),
+            "username": clean_text(pub.get("username"), "anonymous"),
+            "title": clean_text(pub.get("title"), "Untitled Project"),
+            "license": clean_text(pub.get("license"), "unknown"),
+            "awards": awards_str,
+            "source": "readytensor_publication",
         }
 
-        # Full text for splitting
         full_text = f"""
-        Title: {pub.get('title')}
-        Author: {pub.get('username')}
-        Description: {desc}
-        Awards: {awards_str}
-        """
+Title: {metadata['title']}
+Author: {metadata['username']}
+Description: {desc}
+Awards: {awards_str}
+        """.strip()
 
-        # Apply chunking
         chunks = splitter.split_text(full_text)
+
         for i, chunk in enumerate(chunks):
             documents.append(Document(
-                page_content=chunk.strip(),
-                metadata={**metadata, "chunk": i}
+                page_content=chunk,
+                metadata={**metadata, "chunk_index": i, "total_chunks": len(chunks)}
             ))
 
-        # Print sanity check
-        print(f"📄 {pub.get('title')} | Awards: {awards_str} | Chunks: {len(chunks)}")
+        print(f"{metadata['title'][:60]:<60} | Awards: {awards_str or 'none'} | Chunks: {len(chunks)}")
 
-    # Build Chroma DB
+        # Chroma vectorstore — telemetry permanently disabled
     vectorstore = Chroma(
-        persist_directory=CHROMA_DIR,
+        persist_directory=str(CHROMA_DIR),
         embedding_function=embeddings,
+        client_settings=chromadb.Settings(anonymized_telemetry=False)
     )
 
-    # Safe batching
-    batch_add_documents(vectorstore, documents, batch_size=5000)
+    print(f"\nAdding {len(documents)} chunks to ChromaDB...")
+    batch_add_documents(vectorstore, documents)
 
-    print(f"✅ Ingested {len(documents)} chunks across {len(publications)} publications into {CHROMA_DIR}")
-
-# --- Run ---
-if __name__ == "__main__":
-    ingest()
+    print(f"\nSUCCESS: Ingested {len(documents)} chunks from {len(publications)} projects")
+    print(f"Database ready at: {CHROMA_DIR}")

@@ -1,0 +1,23 @@
+# config.yaml — Central configuration (reviewer requirement)
+app:
+  title: "Developer Inspiration Assistant"
+  max_results: 5
+
+embedding:
+  model: "sentence-transformers/all-MiniLM-L6-v2"
+  device: "cpu"
+
+retrieval:
+  default_k: 500
+  final_k: 5
+  fuzzy_threshold: 70
+
+llm:
+  model: "llama-3.3-70b-versatile"
+  temperature: 0.0
+  max_tokens: 500
+  top_p: 1.0
+  seed: 42
+
+vectorstore:
+  persist_directory: "./chroma_db"

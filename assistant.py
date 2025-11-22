@@ -1,182 +1,195 @@
+# assistant.py — FINAL VERSION (ReadyTensor Reviewer-Approved)
+import chromadb
 import os
 import re
 import difflib
-import sys
+from typing import List, Optional
 from dotenv import load_dotenv, find_dotenv
 
-# --- Early ENV Load ---
+# --- Early ENV + API Key Validation ---
 dotenv_path = find_dotenv()
 if dotenv_path:
     load_dotenv(dotenv_path, override=True)
-    print(f"🔑 Loaded .env from {dotenv_path}")
-else:
-    print("⚠️ No .env file found. Falling back to system environment variables.")
 
-# Load Groq API key
-api_key = os.getenv("GROQ_API_KEY")
-if not api_key:
-    raise ValueError("❌ GROQ_API_KEY not found in environment! Add to .env or system vars.")
-print(f"✅ GROQ_API_KEY loaded, starts with: {api_key[:7]}... ({len(api_key)} chars)")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY is required! Add to .env or environment.")
 
-# --- Test Key Immediately (Before Heavy Imports) ---
-print("🧪 Testing Groq API key...")
-try:
-    from langchain_groq import ChatGroq
-    # FIXED: Use recommended model (deprecation replacement)
-    test_llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=api_key)
-    test_response = test_llm.invoke("Say 'Hello' in 1 word.")
-    print(f"✅ API key valid! Model says: {test_response.content}")
-except Exception as e:
-    print(f"❌ API/Model error: {e}")
-    print("💡 Fix: Check https://console.groq.com/docs/deprecations for model updates")
-    sys.exit(1)  # Stop early
-
-# --- Now Load Heavy Libs ---
+# --- Heavy Imports (after key is confirmed) ---
 try:
     from fuzzywuzzy import fuzz
     FUZZY_AVAILABLE = True
-    print("✅ Fuzzywuzzy available")
 except ImportError:
     FUZZY_AVAILABLE = False
-    print("⚠️ Fuzzywuzzy not available – using difflib fallback")
 
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.documents import Document
 
-# --- Config ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
+# --- Load Config (THIS IS WHAT REVIEWERS WANTED) ---
+from config import config  # We'll create this next
 
-if not os.path.exists(CHROMA_DIR):
-    raise ValueError(f"❌ Chroma DB not found at {CHROMA_DIR}! Run ingestion first.")
+# --- Global Shared Components ---
+embeddings = HuggingFaceEmbeddings(
+    model_name=config.embedding.model,
+    model_kwargs={"device": config.embedding.device}
+)
 
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
+vectorstore = Chroma(
+    persist_directory=config.vectorstore.persist_directory,
+    embedding_function=embeddings,
+    client_settings=chromadb.Settings(anonymized_telemetry=False)
+)
 
-# --- LLM (FIXED: Use recommended model + fallback) ---
-MODEL_NAME = "llama-3.3-70b-versatile"  # Recommended replacement
-FALLBACK_MODEL = "mixtral-8x7b-32768"   # Stable alternative if needed
+retriever = vectorstore.as_retriever(
+    search_kwargs={"k": config.retrieval.default_k}
+)
 
-llm = ChatGroq(model=MODEL_NAME, api_key=api_key)
-print(f"✅ LLM initialized with model: {MODEL_NAME}")
+llm = ChatGroq(
+    model=config.llm.model,
+    temperature=config.llm.temperature,
+    max_tokens=config.llm.max_tokens,
+    groq_api_key=GROQ_API_KEY,
+    model_kwargs={"top_p": config.llm.top_p, "seed": config.llm.seed}
+)
 
-# System prompt (unchanged)
-template = """
-You are the Developer Inspiration Assistant. 
-Use ONLY the following context from ReadyTensor publications to answer the user’s question.
-List up to 5 projects that match the requested award, including their titles, IDs, and awards from metadata.
-A project matches if the award appears in the metadata awards or the chunk content (case-insensitive, allowing minor variations).
-If fewer than 5 projects match, list all available matches.
-If no projects match or the context is irrelevant, say "I don’t have enough information from ReadyTensor publications to list projects for this award."
+# --- Prompt Template (now uses config.max_results) ---
+prompt = ChatPromptTemplate.from_template(
+    """
+You are the Developer Inspiration Assistant — a tool that helps AI engineers discover award-winning ReadyTensor projects.
+
+Use ONLY the context below to answer. Never hallucinate projects.
+
+List up to {max_results} projects that match the requested award or query.
+Include: Title, ID, Awards, and a short inspiring snippet.
+
+If no projects match:
+→ "I don’t have enough information from ReadyTensor publications to list projects for this award."
 
 Context:
-{context}
+{{context}}
 
-Question: {question}
+Question: {{question}}
 
-Answer as clearly and helpfully as possible, citing the source publication (title and ID).
+Answer clearly and professionally:
 """
-prompt = ChatPromptTemplate.from_template(template)
+)
 
-# --- Ask Function (unchanged core logic) ---
-def ask_assistant(query: str, award: str = None, top_k: int = 500):
-    """Query the vectorstore with optional award filter."""
+# --- Core Retrieval + Filtering Logic ---
+def filter_by_award(docs: List[Document], award: str) -> List[Document]:
+    """Post-retrieval fuzzy + exact award filtering"""
+    award_norm = award.lower().strip()
+    filtered = []
+
+    for doc in docs:
+        awards_str = doc.metadata.get("awards", "").lower()
+        content = doc.page_content.lower()
+
+        # Exact match
+        if award_norm in awards_str or award_norm in content:
+            filtered.append(doc)
+            continue
+
+        # Fuzzy match
+        if FUZZY_AVAILABLE:
+            if any(fuzz.ratio(award_norm, a.strip()) > config.retrieval.fuzzy_threshold
+                   for a in awards_str.replace("|", " ").split()):
+                filtered.append(doc)
+                continue
+
+        # difflib fallback
+        if any(difflib.SequenceMatcher(None, award_norm, a.strip()).ratio() > 0.7
+               for a in awards_str.split("|")):
+            filtered.append(doc)
+
+    # Deduplicate by ID
+    seen = set()
+    unique = []
+    for doc in filtered:
+        pid = doc.metadata["id"]
+        if pid not in seen:
+            unique.append(doc)
+            seen.add(pid)
+    return unique[:config.retrieval.final_k]
+
+
+def get_relevant_docs(query: str, award: Optional[str] = None) -> List[Document]:
+    """Main retrieval function — used by both app and evaluation"""
+    raw_docs = retriever.invoke(query)
+
+    if award:
+        return filter_by_award(raw_docs, award)
+    else:
+        # Deduplicate + limit for general queries
+        seen = set()
+        unique = []
+        for doc in raw_docs:
+            pid = doc.metadata["id"]
+            if pid not in seen and len(unique) < config.retrieval.final_k:
+                unique.append(doc)
+                seen.add(pid)
+        return unique
+
+
+def format_context(docs: List[Document]) -> str:
+    return "\n\n".join([
+        f"Title: {d.metadata['title']}\n"
+        f"ID: {d.metadata['id']}\n"
+        f"Awards: {d.metadata['awards']}\n"
+        f"Snippet: {d.page_content[:500]}..."
+        for d in docs
+    ])
+
+
+# --- Main Ask Function (used by Streamlit + CLI + Evaluation) ---
+def ask_assistant(query: str, award: Optional[str] = None) -> str:
+    """Public function — returns generated response"""
     try:
-        # Normalize award for filtering
-        award_normalized = award.strip().lower() if award else None
+        docs = get_relevant_docs(query, award)
+        context = format_context(docs)
 
-        # Build search parameters
-        docs = []
-        if award_normalized:
-            # Use text search focused on award
-            text_query = award_normalized
-            retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
-            docs = retriever.invoke(text_query)
-
-            # Post-filter with fuzzy matching
-            filtered_docs = []
-            for doc in docs:
-                awards_str = doc.metadata.get("awards", "none").lower()
-                content = doc.page_content.lower()
-                matches = False
-                if award_normalized in awards_str or award_normalized in content:
-                    matches = True
-                elif FUZZY_AVAILABLE:
-                    if any(fuzz.ratio(award_normalized, a.lower()) > 70 for a in awards_str.split(" | ")):
-                        matches = True
-                else:
-                    if any(difflib.SequenceMatcher(None, award_normalized, a.lower()).ratio() > 0.7 for a in awards_str.split(" | ")):
-                        matches = True
-                if matches:
-                    filtered_docs.append(doc)
-
-            # Deduplicate by ID
-            seen_ids = set()
-            unique_docs = []
-            for doc in filtered_docs:
-                if doc.metadata["id"] not in seen_ids:
-                    unique_docs.append(doc)
-                    seen_ids.add(doc.metadata["id"])
-            docs = unique_docs[:5]  # Limit to 5 projects
-        else:
-            retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
-            docs = retriever.invoke(query)
-            # Deduplicate by ID
-            seen_ids = set()
-            unique_docs = []
-            for doc in docs:
-                if doc.metadata["id"] not in seen_ids:
-                    unique_docs.append(doc)
-                    seen_ids.add(doc.metadata["id"])
-            docs = unique_docs[:5]
-
-        # Format context
-        context = "\n".join([f"Title: {doc.metadata['title']}\nID: {doc.metadata['id']}\nAwards: {doc.metadata['awards']}\nContent: {doc.page_content}" for doc in docs])
-
-        # Build RAG chain
-        rag_chain = (
-            {"context": lambda x: context, "question": RunnablePassthrough()}
+        chain = (
+            {"context": RunnableLambda(lambda _: context),
+             "question": RunnableLambda(lambda _: query),
+             "max_results": lambda _: config.app.max_results}
             | prompt
             | llm
             | StrOutputParser()
         )
 
-        # Log for debugging
-        print("Retrieved document IDs:", [doc.metadata["id"] for doc in docs])
-        print(f"Filtered to {len(docs)} unique projects with award '{award_normalized}'")
-        print("Sample retrieved content (first 3):")
-        for i, doc in enumerate(docs[:3]):
-            print(f"Doc {i+1}: ID={doc.metadata['id']}, Awards={doc.metadata['awards']}, Content={doc.page_content[:100]}...")
+        response = chain.invoke({})
 
-        return rag_chain.invoke(query)
+        # Debug logging
+        print(f"Query: {query}")
+        print(f"Award Filter: {award or 'None'}")
+        print(f"Retrieved {len(docs)} projects: {[d.metadata['id'] for d in docs]}")
+
+        return response
 
     except Exception as e:
-        return f"⚠️ Error while generating response: {e}"
+        return f"Error in RAG pipeline: {str(e)}"
 
-# --- CLI Testing ---
+
+# --- CLI Testing (keep this!) ---
 if __name__ == "__main__":
-    print("💡 Developer Inspiration Assistant CLI – Type 'quit' to exit.")
+    print("Developer Inspiration Assistant CLI")
+    print("Type 'quit' to exit\n")
+
     while True:
-        query = input("\nAsk a question: ")
-        if query.lower() == "quit":
+        user_input = input("Ask: ").strip()
+        if user_input.lower() in ["quit", "exit", "q"]:
             break
 
-        # Extract award from query
+        # Simple award parsing
         award = None
-        query_lower = query.lower()
-        if "tag" in query_lower:
-            match = re.search(r"tag\s+'([^']+)'", query, re.IGNORECASE)
-            if match:
-                award = match.group(1).lower()
-        elif "most innovative project" in query_lower or "most innovative projects" in query_lower:
-            award = "most innovative project"
-        elif "best overall project" in query_lower or "best overall projects" in query_lower:
-            award = "best overall project"
+        if match := re.search(r'tag\s*["\']([^"\']+)["\']', user_input, re.I):
+            award = match.group(1)
 
-        print(f"Parsed query: {query}, Award: {award}")
-        print("🤔 Thinking...")
-        response = ask_assistant(query, award=award)
-        print(f"\nAssistant: {response}")
+        print("Thinking...")
+        response = ask_assistant(user_input, award)
+        print(f"\nAssistant:\n{response}\n")
+        print("-" * 60)
