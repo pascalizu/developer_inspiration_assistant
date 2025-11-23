@@ -103,7 +103,7 @@ response = rag_chain.invoke("tag Most Innovative Project")
 > **LLM**: [llama-3.3-70b-versatile](https://huggingface.co/groq) via Groq API — fast and deterministic (temperature=0).  
 > **Files**: [`app.py`](https://github.com/pascalizu/developer_inspiration_assistant/blob/main/app.py), [`assistant.py`](https://github.com/pascalizu/developer_inspiration_assistant/blob/main/assistant.py)  
 > **Why this way?** The k=500 broad search ensures high recall, while filtering and MMR keep precision perfect — no irrelevant noise, no missed winners.
-```
+
 
 ## 5. Evaluation  
 The assistant was evaluated on every official ReadyTensor award category that actually appears in the current dataset. Using RAGAS with Groq’s Llama-3.3-70B as the judge, it achieved perfect 1.00 recall and 1.00 precision at top-10, with faithfulness at 0.98. In plain language: every real winner is found, nothing irrelevant or invented ever appears, and the assistant almost never misattributes an award.
