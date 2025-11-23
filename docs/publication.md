@@ -70,6 +70,8 @@ def get_relevant_docs(query: str):
     
     return unique[:5]
 
+### Zero-hallucination prompt
+```python
 # app.py — final generation
 prompt = """You are an expert ReadyTensor assistant helping developers find inspiration.
 Use ONLY the context below. List up to 5 projects with:
